@@ -158,7 +158,7 @@ const rNavbar = () => {
       <span>${esc(logoText)}</span>
     </div>
     <ul class="nb-nav">
-      ${links.map(l => `<li><a href="#${l.h}" class="${hash === l.h ? 'active' : ''}">${l.i} ${l.l}</a></li>`).join('')}
+      ${links.map(l => `<li><a href="#${l.h}" class="${hash === l.h ? 'active' : ''}" ${l.h === 'booking' ? 'onclick="App.newBk(); return false;"' : ''}>${l.i} ${l.l}</a></li>`).join('')}
     </ul>
     <div class="nb-right">
       <div class="user-pill" onclick="App.toggleUserDD()" id="uPill">
@@ -173,7 +173,7 @@ const rNavbar = () => {
   </div>
 </nav>
 <div class="mob-menu" id="mobMenu">
-  ${links.map(l => `<a href="#${l.h}" class="${hash === l.h ? 'active' : ''}" onclick="App.closeMob()">${l.i} ${l.l}</a>`).join('')}
+  ${links.map(l => `<a href="#${l.h}" class="${hash === l.h ? 'active' : ''}" onclick="${l.h === 'booking' ? 'App.newBk();' : `Nav.go('${l.h}');`} App.closeMob(); return false;">${l.i} ${l.l}</a>`).join('')}
   <div style="height:1px;background:var(--border);margin:8px 0"></div>
   <div style="padding:10px 14px;display:flex;align-items:center;gap:11px">
     <div class="uavatar" style="background:${ac};color:${tc};width:38px;height:38px;font-size:.9rem">${initials(u.name)}</div>
@@ -275,7 +275,7 @@ const rHome = () => {
       <h1>Seu estilo,<br><span>seu horário.</span></h1>
       <p>Agende agora na ${esc(_tenantInfo?.name || 'clínica')}. Rápido, fácil e sem espera.</p>
       <div class="hero-btns">
-        <button class="btn btn-primary btn-lg" onclick="Nav.go('booking')">✦ Agendar Agora</button>
+        <button class="btn btn-primary btn-lg" onclick="App.newBk()">✦ Agendar Agora</button>
         <button class="btn btn-ghost btn-lg" onclick="Nav.go('appointments')">📅 Meus Agendamentos</button>
       </div>
       ${next ? (() => {
@@ -427,7 +427,16 @@ const rBkS4 = () => {
   return `
   <div style="display:flex;align-items:center;gap:11px;margin-bottom:18px"><button class="btn btn-ghost btn-sm" onclick="App.bkBack()">← Voltar</button><h3 style="font-family:var(--ft);font-size:1.15rem">4. Confirme seu agendamento</h3></div>
   <div class="conf-sum">
-    <div class="conf-row"><span class="conf-lbl">👤 Cliente</span><span class="conf-val">${esc(u.name)}</span></div>
+    ${Auth.isAdmin() ? `
+    <div class="conf-row" style="border-bottom: 2px solid var(--border2); margin-bottom: 15px; padding-bottom: 15px;">
+      <span class="conf-lbl">👤 Selecionar Cliente</span>
+      <span class="conf-val">
+        <select id="selBkUser" class="fc" style="padding: 4px 8px; font-size: .85rem; width: 200px;">
+          <option value="${u.id}">Eu mesmo (${esc(u.name)})</option>
+          ${_tenantUsers.filter(usr => usr.id !== u.id).map(usr => `<option value="${usr.id}">${esc(usr.name)} (${esc(usr.email)})</option>`).join('')}
+        </select>
+      </span>
+    </div>` : `<div class="conf-row"><span class="conf-lbl">👤 Cliente</span><span class="conf-val">${esc(u.name)}</span></div>`}
     <div class="conf-row"><span class="conf-lbl">${svcIcon(service.name)} Serviço</span><span class="conf-val">${esc(service.name)}</span></div>
     <div class="conf-row"><span class="conf-lbl">✨ Profissional</span><span class="conf-val">${esc(pro.name)}</span></div>
     <div class="conf-row"><span class="conf-lbl">📅 Data</span><span class="conf-val">${fmtLong(date)}</span></div>
@@ -496,8 +505,9 @@ const rAppointments = () => {
   const u = Auth.cur, td = todayStr();
   const svcs = DB.services(), pros = DB.pros();
   const all = DB.apts();
-  const upcoming = all.filter(a => a.date >= td && a.status !== 'cancelado').sort((a, b) => a.date.localeCompare(b.date));
-  const past = all.filter(a => a.date < td || a.status === 'cancelado').sort((a, b) => b.date.localeCompare(a.date));
+  // Filtra agendamentos do próprio usuário logado
+  const upcoming = all.filter(a => a.userId === u.id && a.date >= td && a.status !== 'cancelado').sort((a, b) => a.date.localeCompare(b.date));
+  const past = all.filter(a => a.userId === u.id && (a.date < td || a.status === 'cancelado')).sort((a, b) => b.date.localeCompare(a.date));
 
   const rCard = (apt, showAct) => {
     const sv = svcs.find(s => s.id === apt.serviceId), pr = pros.find(p => p.id === apt.professionalId);
@@ -881,12 +891,16 @@ export const App = {
     if (hasTenant && Auth.ok()) {
       await DB.loadServices();
       await DB.loadPros();
-      if (Auth.isAdmin()) { await DB.loadApts(); _tenantUsers = await DB.loadTenantUsers(); }
-      else { await DB.loadUserApts(Auth.cur.id); }
+      // Sempre carrega todos os agendamentos para correta verificação de disponibilidade
+      await DB.loadApts();
+      if (Auth.isAdmin()) { _tenantUsers = await DB.loadTenantUsers(); }
     }
 
     if (hash === 'home') content = rHome();
-    else if (hash === 'booking') content = rBooking();
+    else if (hash === 'booking') {
+      if (BS.step === 5) BS.reset(); // Garante que se o usuário já agendou, comece um novo ao voltar
+      content = rBooking();
+    }
     else if (hash === 'appointments') content = rAppointments();
     else if (hash === 'admin') content = rAdmDash();
     else if (hash === 'admin-services') content = rAdmServices();
@@ -1009,6 +1023,12 @@ export const App = {
   async confirmBk() {
     const { service, pro, date, time } = BS; const u = Auth.cur;
     if (!service || !pro || !date || !time) { T.err('Dados incompletos.'); return; }
+    
+    // Define para qual cliente o agendamento será feito (se admin, pode escolher outro)
+    const selEl = document.getElementById('selBkUser');
+    const targetUserId = selEl ? selEl.value : u.id;
+    const targetUser = Auth.isAdmin() ? (_tenantUsers.find(x => x.id === targetUserId) || u) : u;
+
     const btn = document.getElementById('btnConfirmBk');
     btn.disabled = true; btn.textContent = 'Reservando...';
     try {
@@ -1016,7 +1036,7 @@ export const App = {
         T.err('Horário indisponível.'); BS.step = 3; this.render(); return;
       }
       const apt = { 
-        userId: u.id, serviceId: service.id, professionalId: pro.id, 
+        userId: targetUserId, serviceId: service.id, professionalId: pro.id, 
         date, time, status: 'confirmado', createdAt: new Date().toISOString(), price: service.price 
       };
 
@@ -1039,7 +1059,7 @@ export const App = {
         });
       }
 
-      await DB.updateUserPoints(u.id, (u.points || 0) + Math.floor(service.price));
+      await DB.updateUserPoints(targetUserId, (targetUser.points || 0) + Math.floor(service.price));
       BS.step = 5; T.ok('Agendamento confirmado!'); this.render();
     } catch (e) {
       console.error(e); T.err('Erro ao agendar.'); btn.disabled = false; btn.textContent = '✓ Confirmar Agendamento';
